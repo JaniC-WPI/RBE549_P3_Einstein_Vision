@@ -6,8 +6,8 @@ from torchvision.transforms import functional as F
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Load the image and the CSV file
-img = cv2.imread('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/frame2134.jpg')
-df = pd.read_csv('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/labels2134.csv')
+img = cv2.imread('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/frame0523.jpg')
+df = pd.read_csv('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/labels0523.csv')
 
 # Load the monocular depth estimation model (replace with your own model)
 model = torch.hub.load('intel-isl/MiDaS', 'MiDaS')
@@ -44,6 +44,10 @@ for index, row in df.iterrows():
         depth_array = depth_tensor.squeeze().cpu().numpy()
         depth_array = cv2.resize(depth_array, (xmax - xmin, ymax - ymin))
 
+        distance_m = np.median(depth_array)
+
+        print(distance_m)
+
         print(img.shape)
         # Scale the depth values to the original image size
         scale_factor_x = img.shape[1] / 384
@@ -52,6 +56,8 @@ for index, row in df.iterrows():
 
         # Calculate the distance to the car as the median depth value within the bounding box
         distance_m = np.median(depth_array)
+
+        print(distance_m)
 
         # Estimate the size of the car in meters (replace with your own estimate)
         car_size_m = 4
@@ -106,6 +112,8 @@ for index, row in df.iterrows():
         # Calculate the distance to the car as the median depth value within the bounding box
         distance_m = np.median(depth_array)
 
+        print(distance_m)
+
         # Estimate the size of the car in meters (replace with your own estimate)
         class_size_m = 4
 
@@ -120,7 +128,7 @@ for index, row in df.iterrows():
         cv2.line(img, start_pt, end_pt, color, thickness)
 
         # Print the distance to the car in pixels
-        print(f"Distance to car {index}: {car_size_px} pixels")
+        print(f"Distance to trafic lights {index}: {car_size_px} pixels")
         print("actual distance in pixels", start_pt, end_pt)
 
 
