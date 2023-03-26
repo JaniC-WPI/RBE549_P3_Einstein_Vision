@@ -105,9 +105,9 @@ def resnet_ts(frame, label_details, resize=None):
 
 def main():
     # Set the path to the video file
-    video_file = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/Undist/2023-03-03_10-31-11-front_undistort.mp4"
+    video_file = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene1/images2/2023-02-14_11-04-07-front_undistort.mp4"
     # Set the path to the directory where the output images will be saved
-    output_dir = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/"
+    output_dir = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene1/images/"
 
     # Create the output directory if it doesn't exist
     if not os.path.exists(output_dir):
@@ -121,7 +121,7 @@ def main():
 
     # Define the codec and create VideoWriter object
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    output_video = cv2.VideoWriter('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/video.mp4', fourcc, cap.get(cv2.CAP_PROP_FPS), (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+    output_video = cv2.VideoWriter('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene1/images/scene1_video.mp4', fourcc, cap.get(cv2.CAP_PROP_FPS), (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
 
     # Loop through each frame of the video
     for frame_num in range(total_frames):
