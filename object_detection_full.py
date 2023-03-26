@@ -1,128 +1,151 @@
 import cv2
 import numpy as np
-import os
 import torch
 import matplotlib.pyplot as plt
 from PIL import Image as Img
 import torchvision
 from torchvision.transforms import functional as F
 import torch.nn.functional as F_nn
-
-def copy_attr(a, b, include=(), exclude=()):
-    # Copy attributes from b to a, options to only include [...] and to exclude [...]
-    for k, v in b.__dict__.items():
-        if (len(include) and k not in include) or k.startswith('_') or k in exclude:
-            continue
-        else:
-            setattr(a, k, v)
-
+import torch
+import os
+import time
+import argparse
+import pathlib
+import custom_utils
+import csv
+from depth_est_func import depth_est
+from ts_models.fasterrcnn_resnet50 import create_model
+from config import (
+    NUM_CLASSES, DEVICE, CLASSES
+)
 
 
 # Set device to GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# Set the path to the video file
-video_file = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/Undist/2023-03-03_10-31-11-front_undistort.mp4"
 
-# Set the path to the directory where the output images will be saved
-output_dir = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/"
+# load the best model and trained weights
+ts_model = create_model(num_classes=NUM_CLASSES)
+checkpoint = torch.load('/home/jc-merlab/RBE549_P3_Einstein_Vision/helpers/outputs/resnet50_training_model/last_model.pth', map_location=DEVICE)
+ts_model.load_state_dict(checkpoint['model_state_dict'])
+ts_model.to(device).eval()
 
-# load model
+# define the detection threshold...
+# ... any detection having score below this will be discarded
+detection_threshold = 0.3
 
-# model = torch.hub.load('ultralytics/yolov5', 'custom', path='/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/best_93.pt', force_reload=True)
+# For same annotation colors each time.
+np.random.seed(42)
+# this will help us create a different color for each class
+COLORS = np.random.uniform(0, 255, size=(len(CLASSES), 3))
 
-# model = torch.hub.load('CAIC-AD/YOLOPv2', 'yolopv2')
+cars_model = torch.hub.load("ultralytics/yolov5", "yolov5l")
+cars_model.to(device)
 
-# # load model
-# model = torch.hub.load("ultralytics/yolov5", "yolov5l", pretrained=False, classes=43)
-# ckpt_ = torch.load('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/best_93.pt')['model']
-# model.load_state_dict(ckpt_.state_dict(), strict=False)
-# copy_attr(model, ckpt_, include=('yaml', 'nc', 'hyp', 'names', 'stride'), exclude=())
-# model = model.fuse().autoshape()
-# model.to(device)
-
-# weights_path = '/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/best_93.pt'
-# model = torch.load(weights_path)
-
-
-
-# Create the output directory if it doesn't exist
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-
-# Open the video file
-cap = cv2.VideoCapture(video_file)
-
-# Loop through the frames in the video
-frame_num = 1
-while True:
-    # Read the next frame
-    ret, frame = cap.read()
-    if not ret:
-        break
-
-    results = model(frame)
-
-    img = results.render()[0]
-
-    cv2.imshow("signals", img)
-    cv2.waitKey(2)
-
+def yolo_cars(img):
+    results = cars_model(img)
+    annotated_img = results.render()[0]
     label_details = results.pandas().xyxy[0]
+    label_details['distance'] = label_details.apply(lambda row: depth_est(img, (row['xmin'], row['ymin'], row['xmax'], row['ymax']), row['name']), axis=1)
+    # now `label_details` contains a new column `distance` with the distance value for each row
+    # label_csv = label_details.to_csv(os.path.join(output_dir, "labels{:04d}.csv".format(frame_num)), index=False)
+    return annotated_img, label_details
 
-    print(label_details)
+def resnet_ts(frame, label_details, resize=None):
+    img = frame.copy()
+    image = frame.copy()
+    if resize is not None:
+        img = cv2.resize(img, (resize, resize))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
+    # make the pixel range between 0 and 1
+    img /= 255.0
+    # bring color channels to front
+    img = np.transpose(img, (2, 0, 1)).astype(np.float32)
+    # convert to tensor
+    img = torch.tensor(img, dtype=torch.float).cuda()
+    # add batch dimension
+    img = torch.unsqueeze(img, 0)
+    with torch.no_grad():
+        # get predictions for the current frame
+        outputs = ts_model(img.to(DEVICE))
 
-    label_csv = label_details.to_csv(os.path.join(output_dir, "labels{:04d}.csv".format(frame_num)), index=False)
+    # load all detection to CPU for further operations
+    outputs = [{k: v.to('cpu') for k, v in t.items()} for t in outputs]
+    # carry further only if there are detected boxes
+    if len(outputs[0]['boxes']) != 0:
+        boxes = outputs[0]['boxes'].data.numpy()
+        scores = outputs[0]['scores'].data.numpy()
+        classes = outputs[0]['labels'].cpu().numpy()
+        # filter out boxes according to `detection_threshold`
+        boxes = boxes[scores >= detection_threshold].astype(np.int32)
+        draw_boxes = boxes.copy()
+        # get all the predicited class names
+        pred_classes = [CLASSES[i] for i in outputs[0]['labels'].cpu().numpy()]
+        # draw the bounding boxes and write the class name on top of it
+        for j, box in enumerate(draw_boxes):
+            class_num = classes[j]
+            class_name = pred_classes[j]
+            color = COLORS[CLASSES.index(class_name)]
+            frame = custom_utils.draw_boxes(frame, box, color, resize)
+            frame = custom_utils.put_class_text(
+                frame, box, class_name,
+                color, resize
+            )
+            xmin = int(box[0])
+            ymin = int(box[1])
+            xmax = int(box[2])
+            ymax = int(box[3])
+            confidence = confidence
+            cls = class_num
+            name = class_name
+            distance = depth_est(frame, box, class_name)
+            # add new row to `label_details`
+            label_details.loc[len(label_details)] = [xmin, ymin, xmax, ymax, confidence, cls, name, distance]
+    return frame, label_details
 
-    # inf_img = Img.fromarray(frame)
 
-    # inf_img = F.to_tensor(inf_img).to(device)
-    # print(inf_img.shape)
-    # inf_img.unsqueeze_(0)
-    # print(inf_img.shape)
-    # # inf_img = list(inf_img)
-    # # print(inf_img)
-    # det_out, da_seg_out,ll_seg_out = model(inf_img)
-    # with torch.no_grad():
-    #     model.to(device)
-        # model.eval()
-    
-    # print(det_out)
-    # # Reshape and interpolate the tensors to a common shape
-    # new_shape = (model.output_size, model.output_size)
-    # det_out = [F_nn.interpolate(x.permute(0, 2, 3, 1), new_shape, mode='bilinear').permute(0, 3, 1, 2) for x in det_out]
+def main():
+    # Set the path to the video file
+    video_file = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/Undist/2023-03-03_10-31-11-front_undistort.mp4"
+    # Set the path to the directory where the output images will be saved
+    output_dir = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/"
 
-    # # Concatenate the list of tensors into a single tensor
-    # det_out = torch.cat(det_out, dim=0)
-    # # Reshape the output tensor
-    # det_out = det_out.reshape(-1, model.num_anchors, model.num_classes + 5, model.output_size, model.output_size)
-    # det_out = det_out.permute(0, 3, 4, 1, 2)
+    # Create the output directory if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    # Extract the class probability tensor
-    # class_probs = torch.sigmoid(det_out[..., 5:])
-    
-    # Find the class with the highest probability score for each anchor box
-    # _, class_preds = torch.max(det_out, dim=1)
+    # Open the video file
+    cap = cv2.VideoCapture(video_file)
 
-    # # Convert the class predictions to a numpy array
-    # class_preds = class_preds.cpu().numpy()
+    # Get the total number of frames in the video
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # print(class_preds)
+    # Define the codec and create VideoWriter object
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    output_video = cv2.VideoWriter('/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images/video.mp4', fourcc, cap.get(cv2.CAP_PROP_FPS), (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
 
-    # Draw the predicted bounding boxes and class labels on the input image
-    # for i in range(det_out.shape[0]):
-    #     for j in range(det_out.shape[1]):
-    #         for k in range(det_out.shape[2]):
-    #             if det_out[i, j, k, 4] > 0.5:
-    #                 x1 = int((det_out[i, j, k, 0] - det_out[i, j, k, 2]/2) * frame.shape[1])
-    #                 y1 = int((det_out[i, j, k, 1] - det_out[i, j, k, 3]/2) * frame.shape[0])
-    #                 x2 = int((det_out[i, j, k, 0] + det_out[i, j, k, 2]/2) * frame.shape[1])
-    #                 y2 = int((det_out[i, j, k, 1] + det_out[i, j, k, 3]/2) * frame.shape[0])
-    #                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    #                 cv2.putText(frame, f"{model.classes[class_preds[i, j, k]]} ({det_out[i, j, k, 4]:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    # Loop through each frame of the video
+    for frame_num in range(total_frames):
+        # Read the next frame
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    # print(det_out, da_seg_out,ll_seg_out)
+        # Apply object detection and tracking
+        annotated_img, label_details = yolo_cars(frame)
+        final_labelled_img = resnet_ts(annotated_img, label_details)
 
-    # cv2.imshow("line image", output.render()[0])
-    # cv2.waitKey(2)  
+        label_csv = label_details.to_csv(os.path.join(output_dir, "labels{:04d}.csv".format(frame_num)), index=False)
+        # Save the output frame
+        cv2.imwrite(output_dir + "frame{:04d}.jpg".format(frame_num), final_labelled_img)
 
-    frame += 1
+        # Add the frame to the output video
+        output_video.write(final_labelled_img)
+
+    # Release the video capture and writer objects
+    cap.release()
+    output_video.release()
+
+
+if __name__=='__main__':
+    main()
+

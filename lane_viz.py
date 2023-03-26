@@ -1,22 +1,19 @@
 import bpy
-import cv2
 import numpy as np
 
 # Load the image and convert it to a texture
 img_path = "/home/jc-merlab/RBE549_P3_Einstein_Vision/P3Data/Sequences/scene2/images31/test_img.jpg"
-img = cv2.imread(img_path)
-h, w, c = img.shape
+img = bpy.data.images.load(img_path)
+h, w = img.size
 tex = bpy.data.textures.new("RoadTexture", type="IMAGE")
-img_data = bpy.data.images.new("RoadImage", w, h)
-img_data.pixels = img.reshape(-1)
-tex.image = img_data
+tex.image = img
 
 # Create a new material and assign the texture to it
 mat = bpy.data.materials.new("RoadMaterial")
 mat.use_nodes = True
 nodes = mat.node_tree.nodes
 tex_node = nodes.new(type="ShaderNodeTexImage")
-tex_node.image = img_data
+tex_node.image = img
 principled_node = nodes.get("Principled BSDF")
 mat.node_tree.links.new(tex_node.outputs[0], principled_node.inputs[0])
 
